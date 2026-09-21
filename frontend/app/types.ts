@@ -25,3 +25,23 @@ export interface Conflict {
   root_cause: string;
   resolution: string;
 }
+
+export interface AIRecommendation {
+  train_id: string;
+  station_id: string;
+  suggestion: string;
+  rationale: string;
+  priority_level: "low" | "medium" | "high";
+}
+
+export interface AIChatMessage {
+  id: string;
+  sender: "user" | "assistant";
+  text: string;
+  timestamp: string;
+}
+
+export interface AIStatus {
+  configured: boolean;
+  model: string;
+}

@@ -27,3 +27,8 @@ class AuditLogEntry(Base):
     station_id = Column(String, nullable=True)
     platform = Column(Integer, nullable=True)
     details = Column(String, nullable=True)
+
+    def __init__(self, **kwargs):
+        if "detail" in kwargs and "details" not in kwargs:
+            kwargs["details"] = kwargs.pop("detail")
+        super().__init__(**kwargs)

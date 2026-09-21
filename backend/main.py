@@ -2,24 +2,24 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from models import Station, Visit, OverrideRequest, ScheduleResponse
 from optimizer import greedy_optimizer
 from railradar_client import fetch_live_visits, RailRadarError
-
-
-from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy.orm import Session
+from ilp_optimizer import ilp_optimizer
+from ai_assistant import answer_query, generate_recommendations, is_configured, get_model, AIAssistantError
 from database import get_db, init_db
 from db_models import OverrideRecord, AuditLogEntry
-from ilp_optimizer import ilp_optimizer
+
 
 load_dotenv()
 
@@ -136,46 +136,56 @@ def refresh_trains():
 
 @app.post("/override", response_model=ScheduleResponse)
 def apply_override(payload: OverrideRequest, algorithm: str = "greedy", db: Session = Depends(get_db)):
-    station = next((s for s in STATIONS if s.id == payload.station_id), None)
-    if station is None:
-        raise HTTPException(status_code=404, detail="Unknown station")
-    if not (1 <= payload.platform <= station.platforms):
-        raise HTTPException(status_code=400, detail=f"{station.id} only has platforms 1-{station.platforms}")
+    try:
+        station = next((s for s in STATIONS if s.id == payload.station_id), None)
+        if station is None:
+            raise HTTPException(status_code=404, detail="Unknown station")
+        if not (1 <= payload.platform <= station.platforms):
+            raise HTTPException(status_code=400, detail=f"{station.id} only has platforms 1-{station.platforms}")
 
-    visits = get_current_visits()
-    if not any(v.train_id == payload.train_id and v.station_id == payload.station_id for v in visits):
-        raise HTTPException(status_code=404, detail="No such train visit at that station")
+        visits = get_current_visits()
+        if not any(v.train_id == payload.train_id and v.station_id == payload.station_id for v in visits):
+            raise HTTPException(status_code=404, detail="No such train visit at that station")
 
-    # Upsert the override record
-    record = db.query(OverrideRecord).filter_by(
-        train_id=payload.train_id, 
-        station_id=payload.station_id
-    ).first()
-    
-    if record:
-        record.platform = payload.platform
-    else:
-        record = OverrideRecord(
+        # Upsert the override record
+        record = db.query(OverrideRecord).filter_by(
             train_id=payload.train_id, 
-            station_id=payload.station_id, 
-            platform=payload.platform
+            station_id=payload.station_id
+        ).first()
+        
+        if record:
+            record.platform = payload.platform
+        else:
+            record = OverrideRecord(
+                train_id=payload.train_id, 
+                station_id=payload.station_id, 
+                platform=payload.platform
+            )
+            db.add(record)
+
+        # Add audit log entry
+        audit_entry = AuditLogEntry(
+            action="OVERRIDE",
+            train_id=payload.train_id,
+            station_id=payload.station_id,
+            platform=payload.platform,
+            details=f"Set train {payload.train_id} at {payload.station_id} to platform {payload.platform}",
         )
-        db.add(record)
+        db.add(audit_entry)
+        db.commit()
 
-    # Add audit log entry
-    audit_entry = AuditLogEntry(
-        action="OVERRIDE",
-        detail=f"Set train {payload.train_id} at {payload.station_id} to platform {payload.platform}"
-    )
-    db.add(audit_entry)
-    db.commit()
-
-    overrides = load_overrides_dict(db)
-    if algorithm == "ilp":
-        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
-    else:
-        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
-    return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+        overrides = load_overrides_dict(db)
+        if algorithm == "ilp":
+            schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+        else:
+            schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+        return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Override failed: {type(e).__name__}: {str(e)}")
 
 
 @app.post("/reset", response_model=ScheduleResponse)
@@ -186,7 +196,7 @@ def reset_overrides(algorithm: str = "greedy", db: Session = Depends(get_db)):
     # Add audit log entry
     audit_entry = AuditLogEntry(
         action="RESET",
-        detail="Cleared all manual platform overrides"
+        details="Cleared all manual platform overrides",
     )
     db.add(audit_entry)
     db.commit()
@@ -200,5 +210,39 @@ def reset_overrides(algorithm: str = "greedy", db: Session = Depends(get_db)):
     return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
 
 
+@app.get("/ai/status")
+def ai_status():
+    return {"configured": is_configured(), "model": get_model()}
+
+
+class AIQueryRequest(BaseModel):
+    query: str
+
+
+@app.post("/ai/analyze-schedule")
+def ai_analyze_schedule(payload: Optional[AIQueryRequest] = None, query: Optional[str] = None, db: Session = Depends(get_db)):
+    q = (payload.query if payload else None) or query
+    if not q:
+        raise HTTPException(status_code=400, detail="Query is required")
+    visits = get_current_visits()
+    overrides = load_overrides_dict(db)
+    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    try:
+        answer = answer_query(q, schedule, conflicts)
+    except AIAssistantError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"query": q, "answer": answer}
+
+
+@app.get("/recommendations")
+def get_recommendations(db: Session = Depends(get_db)):
+    visits = get_current_visits()
+    overrides = load_overrides_dict(db)
+    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    try:
+        recs = generate_recommendations(schedule, conflicts)
+    except AIAssistantError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return {"recommendations": recs}
 # Serve the frontend (single-page, no build step) at the root URL
 

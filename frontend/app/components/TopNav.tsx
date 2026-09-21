@@ -3,9 +3,11 @@ import { Dispatch, SetStateAction, useEffect, useState } from "react";
 interface Props {
   algorithm: "greedy" | "ilp";
   setAlgorithm: Dispatch<SetStateAction<"greedy" | "ilp">>;
+  onToggleAI?: () => void;
+  isAIOpen?: boolean;
 }
 
-export default function TopNav({ algorithm, setAlgorithm }: Props) {
+export default function TopNav({ algorithm, setAlgorithm, onToggleAI, isAIOpen }: Props) {
   const [time, setTime] = useState<string>("--:--:--");
 
   useEffect(() => {
@@ -82,8 +84,34 @@ export default function TopNav({ algorithm, setAlgorithm }: Props) {
         </div>
       </div>
 
-      {/* Real-time Clock & System Status */}
-      <div className="flex items-center gap-3">
+      {/* Right Controls: AI Assistant & Real-time Clock */}
+      <div className="flex items-center gap-2.5 sm:gap-3">
+        {onToggleAI && (
+          <button
+            type="button"
+            onClick={onToggleAI}
+            aria-label="Toggle TrainVision AI Copilot"
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer border ${
+              isAIOpen
+                ? "bg-cyan text-deep font-semibold border-cyan shadow-md shadow-cyan/30"
+                : "bg-panel border-border text-secondary hover:text-cyan hover:border-cyan/40 hover:bg-deep shadow-sm"
+            }`}
+          >
+            <svg className={`w-3.5 h-3.5 ${isAIOpen ? "text-deep" : "text-cyan"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 2v4" />
+              <path d="m4.93 4.93 2.83 2.83" />
+              <path d="M2 12h4" />
+              <path d="m4.93 19.07 2.83-2.83" />
+              <path d="M12 22v-4" />
+              <path d="m19.07 19.07-2.83-2.83" />
+              <path d="M22 12h-4" />
+              <path d="m19.07 4.93-2.83 2.83" />
+            </svg>
+            <span className="font-semibold tracking-tight">AI Copilot</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${isAIOpen ? "bg-deep animate-ping" : "bg-cyan animate-pulse"}`} />
+          </button>
+        )}
+
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-deep/80 border border-border shadow-inner">
           <svg className="w-3.5 h-3.5 text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="10" />

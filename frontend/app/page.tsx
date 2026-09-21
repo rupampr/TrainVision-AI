@@ -4,6 +4,7 @@ import { useState, useEffect, FormEvent } from "react";
 import TopNav from "./components/TopNav";
 import ScheduleView from "./components/ScheduleView";
 import ControlPanel from "./components/ControlPanel";
+import AIAssistant from "./components/AIAssistant";
 import { Station, ScheduleEntry, Conflict } from "./types";
 
 const API_URL = "http://127.0.0.1:8000";
@@ -23,6 +24,7 @@ export default function ControlCenter() {
   const [currentStation, setCurrentStation] = useState<string>("ALL");
   const [overrideVisit, setOverrideVisit] = useState<string>("");
   const [overridePlatform, setOverridePlatform] = useState<string>("1");
+  const [isAIOpen, setIsAIOpen] = useState<boolean>(false);
 
   // Load Stations
   useEffect(() => {
@@ -100,7 +102,12 @@ export default function ControlCenter() {
 
   return (
     <div className="min-h-screen bg-deep text-primary font-sans flex flex-col antialiased">
-      <TopNav algorithm={algorithm} setAlgorithm={setAlgorithm} />
+      <TopNav 
+        algorithm={algorithm} 
+        setAlgorithm={setAlgorithm} 
+        onToggleAI={() => setIsAIOpen((prev) => !prev)}
+        isAIOpen={isAIOpen}
+      />
 
       {/* Station Navigation Tab Strip */}
       <nav 
@@ -173,6 +180,12 @@ export default function ControlCenter() {
           onReset={handleReset}
         />
       </main>
+
+      <AIAssistant
+        isOpen={isAIOpen}
+        onClose={() => setIsAIOpen(false)}
+        onSelectTrain={(trainId, stationId) => setOverrideVisit(`${trainId}|${stationId}`)}
+      />
     </div>
   );
 }

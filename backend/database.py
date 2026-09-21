@@ -1,10 +1,13 @@
 import os
-
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
+load_dotenv()
+
 DATABASE_URL = os.getenv(
-    "DATABASE_URL"
+    "DATABASE_URL",
+    "postgresql+psycopg2://trainvision:trainvision@127.0.0.1:5433/trainvision",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
