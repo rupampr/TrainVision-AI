@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from sqlalchemy.orm import Session
 from database import get_db, init_db
 from db_models import OverrideRecord, AuditLogEntry
+from ilp_optimizer import ilp_optimizer
 
 load_dotenv()
 
@@ -109,12 +110,14 @@ def get_trains():
 
 
 @app.get("/schedule", response_model=ScheduleResponse)
-def get_schedule(db: Session = Depends(get_db)):
+def get_schedule(algorithm: str = "greedy", db: Session = Depends(get_db)):
     visits = get_current_visits()
     overrides = load_overrides_dict(db)
-    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    if algorithm == "ilp":
+        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+    else:
+        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
     return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
-
 
 @app.get("/log")
 def get_audit_log(db: Session = Depends(get_db)):
@@ -132,7 +135,7 @@ def refresh_trains():
 
 
 @app.post("/override", response_model=ScheduleResponse)
-def apply_override(payload: OverrideRequest, db: Session = Depends(get_db)):
+def apply_override(payload: OverrideRequest, algorithm: str = "greedy", db: Session = Depends(get_db)):
     station = next((s for s in STATIONS if s.id == payload.station_id), None)
     if station is None:
         raise HTTPException(status_code=404, detail="Unknown station")
@@ -168,12 +171,15 @@ def apply_override(payload: OverrideRequest, db: Session = Depends(get_db)):
     db.commit()
 
     overrides = load_overrides_dict(db)
-    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    if algorithm == "ilp":
+        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+    else:
+        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
     return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
 
 
 @app.post("/reset", response_model=ScheduleResponse)
-def reset_overrides(db: Session = Depends(get_db)):
+def reset_overrides(algorithm: str = "greedy", db: Session = Depends(get_db)):
     # Delete all overrides
     db.query(OverrideRecord).delete()
     
@@ -187,7 +193,10 @@ def reset_overrides(db: Session = Depends(get_db)):
 
     overrides = load_overrides_dict(db)
     visits = get_current_visits()
-    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    if algorithm == "ilp":
+        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+    else:
+        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
     return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
 
 

@@ -1,26 +1,62 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0b0f17;
+  --foreground: #f8fafc;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@theme {
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-deep: #0b0f17;
+  --color-panel: #111827;
+  --color-panel-alt: #162032;
+  --color-panel-elevated: #1e293b;
+  --color-border: #1e293b;
+  --color-border-bright: #334155;
+  --color-row-hover: rgba(30, 41, 59, 0.5);
+
+  --color-primary: #f8fafc;
+  --color-secondary: #94a3b8;
+  --color-dim: #64748b;
+
+  --color-cyan: #06b6d4;
+  --color-cyan-glow: #22d3ee;
+  --color-cyan-dim: rgba(6, 182, 212, 0.12);
+
+  --color-emerald: #10b981;
+  --color-emerald-dim: rgba(16, 185, 129, 0.12);
+  --color-green: #10b981;
+  --color-green-dim: rgba(16, 185, 129, 0.12);
+
+  --color-amber: #f59e0b;
+  --color-amber-dim: rgba(245, 158, 11, 0.12);
+
+  --color-red: #f43f5e;
+  --color-red-dim: rgba(244, 63, 94, 0.12);
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  letter-spacing: -0.01em;
+}
+
+/* Custom sleek scrollbars for operations console */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0f17;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
 }

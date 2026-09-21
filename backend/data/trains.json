@@ -1,26 +1,26 @@
 {
   "stations": [
-    { "id": "HYB", "name": "Hyderabad Deccan", "platforms": 3 },
-    { "id": "SC", "name": "Secunderabad Junction", "platforms": 4 },
-    { "id": "KCG", "name": "Kacheguda", "platforms": 2 }
+    { "id": "HWH", "name": "Howrah Junction", "platforms": 8 },
+    { "id": "SRC", "name": "Santragachi Junction", "platforms": 4 },
+    { "id": "KGP", "name": "Kharagpur Junction", "platforms": 6 }
   ],
   "visits": [
-    { "id": "T101-HYB", "train_id": "T101", "name": "Deccan Express", "type": "Express", "priority": 9, "station_id": "HYB", "scheduled_arrival": "08:00", "scheduled_departure": "08:10", "platform_pref": 1 },
-    { "id": "T102-HYB", "train_id": "T102", "name": "Charminar Express", "type": "Express", "priority": 8, "station_id": "HYB", "scheduled_arrival": "08:05", "scheduled_departure": "08:15", "platform_pref": 1 },
-    { "id": "T103-HYB", "train_id": "T103", "name": "MMTS Local 3", "type": "Local", "priority": 5, "station_id": "HYB", "scheduled_arrival": "08:08", "scheduled_departure": "08:20", "platform_pref": 2 },
-    { "id": "T104-HYB", "train_id": "T104", "name": "Freight 22", "type": "Freight", "priority": 2, "station_id": "HYB", "scheduled_arrival": "08:12", "scheduled_departure": "08:40", "platform_pref": 2 },
-    { "id": "T105-HYB", "train_id": "T105", "name": "MMTS Local 7", "type": "Local", "priority": 5, "station_id": "HYB", "scheduled_arrival": "08:30", "scheduled_departure": "08:35", "platform_pref": 3 },
+    { "id": "T101-HWH", "train_id": "T101", "name": "Howrah Vande Bharat", "type": "Express", "priority": 9, "station_id": "HWH", "scheduled_arrival": "08:00", "scheduled_departure": "08:10", "platform_pref": 1 },
+    { "id": "T102-HWH", "train_id": "T102", "name": "Saraighat Express", "type": "Express", "priority": 8, "station_id": "HWH", "scheduled_arrival": "08:05", "scheduled_departure": "08:15", "platform_pref": 1 },
+    { "id": "T103-HWH", "train_id": "T103", "name": "Howrah - CSMT Mail", "type": "Mail", "priority": 7, "station_id": "HWH", "scheduled_arrival": "08:08", "scheduled_departure": "08:20", "platform_pref": 2 },
+    { "id": "T104-HWH", "train_id": "T104", "name": "Freight 22", "type": "Freight", "priority": 2, "station_id": "HWH", "scheduled_arrival": "08:12", "scheduled_departure": "08:40", "platform_pref": 2 },
+    { "id": "T105-HWH", "train_id": "T105", "name": "Howrah Local 7", "type": "Local", "priority": 5, "station_id": "HWH", "scheduled_arrival": "08:30", "scheduled_departure": "08:35", "platform_pref": 3 },
 
-    { "id": "T201-SC", "train_id": "T201", "name": "Godavari Express", "type": "Express", "priority": 9, "station_id": "SC", "scheduled_arrival": "09:00", "scheduled_departure": "09:12", "platform_pref": 1 },
-    { "id": "T202-SC", "train_id": "T202", "name": "Falaknuma Express", "type": "Express", "priority": 8, "station_id": "SC", "scheduled_arrival": "09:05", "scheduled_departure": "09:15", "platform_pref": 1 },
-    { "id": "T203-SC", "train_id": "T203", "name": "Passenger 45", "type": "Passenger", "priority": 4, "station_id": "SC", "scheduled_arrival": "09:10", "scheduled_departure": "09:25", "platform_pref": 2 },
-    { "id": "T204-SC", "train_id": "T204", "name": "Local 12", "type": "Local", "priority": 5, "station_id": "SC", "scheduled_arrival": "09:12", "scheduled_departure": "09:20", "platform_pref": 2 },
-    { "id": "T205-SC", "train_id": "T205", "name": "Freight 9", "type": "Freight", "priority": 3, "station_id": "SC", "scheduled_arrival": "09:20", "scheduled_departure": "09:50", "platform_pref": 3 },
-    { "id": "T206-SC", "train_id": "T206", "name": "Kacheguda Intercity", "type": "Intercity", "priority": 7, "station_id": "SC", "scheduled_arrival": "09:22", "scheduled_departure": "09:30", "platform_pref": 3 },
-    { "id": "T207-SC", "train_id": "T207", "name": "MMTS SC Local", "type": "Local", "priority": 6, "station_id": "SC", "scheduled_arrival": "09:40", "scheduled_departure": "09:45", "platform_pref": 4 },
+    { "id": "T201-SRC", "train_id": "T201", "name": "Santragachi AC Express", "type": "Express", "priority": 9, "station_id": "SRC", "scheduled_arrival": "09:00", "scheduled_departure": "09:12", "platform_pref": 1 },
+    { "id": "T202-SRC", "train_id": "T202", "name": "Shalimar Express", "type": "Express", "priority": 8, "station_id": "SRC", "scheduled_arrival": "09:05", "scheduled_departure": "09:15", "platform_pref": 1 },
+    { "id": "T203-SRC", "train_id": "T203", "name": "Passenger 45", "type": "Passenger", "priority": 4, "station_id": "SRC", "scheduled_arrival": "09:10", "scheduled_departure": "09:25", "platform_pref": 2 },
+    { "id": "T204-SRC", "train_id": "T204", "name": "SRC Local 12", "type": "Local", "priority": 5, "station_id": "SRC", "scheduled_arrival": "09:12", "scheduled_departure": "09:20", "platform_pref": 2 },
+    { "id": "T205-SRC", "train_id": "T205", "name": "Freight 9", "type": "Freight", "priority": 3, "station_id": "SRC", "scheduled_arrival": "09:20", "scheduled_departure": "09:50", "platform_pref": 3 },
+    { "id": "T206-SRC", "train_id": "T206", "name": "Digha Express", "type": "Intercity", "priority": 7, "station_id": "SRC", "scheduled_arrival": "09:22", "scheduled_departure": "09:30", "platform_pref": 3 },
+    { "id": "T207-SRC", "train_id": "T207", "name": "Santragachi Local", "type": "Local", "priority": 6, "station_id": "SRC", "scheduled_arrival": "09:40", "scheduled_departure": "09:45", "platform_pref": 4 },
 
-    { "id": "T301-KCG", "train_id": "T301", "name": "Kacheguda Express", "type": "Express", "priority": 8, "station_id": "KCG", "scheduled_arrival": "10:00", "scheduled_departure": "10:10", "platform_pref": 1 },
-    { "id": "T302-KCG", "train_id": "T302", "name": "Passenger 88", "type": "Passenger", "priority": 4, "station_id": "KCG", "scheduled_arrival": "10:05", "scheduled_departure": "10:18", "platform_pref": 1 },
-    { "id": "T303-KCG", "train_id": "T303", "name": "Local 5", "type": "Local", "priority": 5, "station_id": "KCG", "scheduled_arrival": "10:20", "scheduled_departure": "10:28", "platform_pref": 2 }
+    { "id": "T301-KGP", "train_id": "T301", "name": "Kharagpur Express", "type": "Express", "priority": 8, "station_id": "KGP", "scheduled_arrival": "10:00", "scheduled_departure": "10:10", "platform_pref": 1 },
+    { "id": "T302-KGP", "train_id": "T302", "name": "Passenger 88", "type": "Passenger", "priority": 4, "station_id": "KGP", "scheduled_arrival": "10:05", "scheduled_departure": "10:18", "platform_pref": 1 },
+    { "id": "T303-KGP", "train_id": "T303", "name": "Local 5", "type": "Local", "priority": 5, "station_id": "KGP", "scheduled_arrival": "10:20", "scheduled_departure": "10:28", "platform_pref": 2 }
   ]
 }
