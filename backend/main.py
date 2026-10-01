@@ -11,6 +11,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+import asyncio
+from fastapi import WebSocket, WebSocketDisconnect
 
 from models import Station, Visit, OverrideRequest, ScheduleResponse
 from optimizer import greedy_optimizer
@@ -19,6 +21,8 @@ from ilp_optimizer import ilp_optimizer
 from ai_assistant import answer_query, generate_recommendations, is_configured, get_model, AIAssistantError
 from database import get_db, init_db
 from db_models import OverrideRecord, AuditLogEntry
+from websocket_manager import manager
+from train_positions import get_positions, prioritize_trains_for_tracking
 
 
 load_dotenv()
@@ -41,15 +45,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_cors_and_pna_headers(request, call_next):
+    response = await call_next(request)
+    if request.headers.get("access-control-request-private-network"):
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+
 with open(DATA_PATH) as f:
     raw = json.load(f)
 
 STATIONS = [Station(**s) for s in raw["stations"]]
 STATIC_VISITS = [Visit(**v) for v in raw["visits"]]
 
+async def position_broadcast_loop():
+    while True:
+        await asyncio.sleep(10)  # push to clients every 10s
+        if manager.active:
+            visits = get_current_visits()
+            train_ids = prioritize_trains_for_tracking(visits)
+            positions = get_positions(train_ids)
+            await manager.broadcast({"type": "positions", "data": positions})
+
 @app.on_event("startup")
 def on_startup():
     init_db()
+
+@app.on_event("startup")
+async def start_broadcast_loop():
+    asyncio.create_task(position_broadcast_loop())
 
 
 def load_overrides_dict(db: Session) -> Dict[Tuple[str, str], int]:
@@ -71,7 +97,7 @@ def get_current_visits(force_refresh: bool = False) -> List[Visit]:
             if not live_visits:
                 raise RailRadarError("RailRadar returned no trains for any station")
             _cache.update(visits=live_visits, fetched_at=now, source="railradar", error=None)
-        except RailRadarError as e:
+        except Exception as e:
             _cache["error"] = str(e)
             if _cache["visits"] is None:
                 # No cached data at all yet (e.g. first request, no API key) —
@@ -111,13 +137,20 @@ def get_trains():
 
 @app.get("/schedule", response_model=ScheduleResponse)
 def get_schedule(algorithm: str = "greedy", db: Session = Depends(get_db)):
-    visits = get_current_visits()
-    overrides = load_overrides_dict(db)
-    if algorithm == "ilp":
-        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
-    else:
-        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
-    return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+    try:
+        visits = get_current_visits()
+        overrides = load_overrides_dict(db)
+        if algorithm == "ilp":
+            schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+        else:
+            schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+        return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate schedule: {type(e).__name__}: {str(e)}")
 
 @app.get("/log")
 def get_audit_log(db: Session = Depends(get_db)):
@@ -244,5 +277,20 @@ def get_recommendations(db: Session = Depends(get_db)):
     except AIAssistantError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {"recommendations": recs}
-# Serve the frontend (single-page, no build step) at the root URL
 
+
+@app.get("/train-positions")
+def train_positions():
+    visits = get_current_visits()
+    train_ids = prioritize_trains_for_tracking(visits)
+    return get_positions(train_ids)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # keeps connection alive; client doesn't need to send anything meaningful
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)

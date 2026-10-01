@@ -19,6 +19,8 @@ import requests
 
 from models import Visit
 
+dotenv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+load_dotenv(dotenv_path)
 load_dotenv()
 
 RAILRADAR_BASE_URL = os.getenv("RAILRADAR_BASE_URL", "https://api.railradar.in/v1")
@@ -87,13 +89,20 @@ def fetch_station_live_board(station_code: str, hours: int = RAILRADAR_HOURS_AHE
     if resp.status_code != 200:
         raise RailRadarError(f"RailRadar returned {resp.status_code} for {station_code}: {resp.text[:200]}")
 
-    payload = resp.json()
-    if not payload.get("success"):
-        raise RailRadarError(f"RailRadar error for {station_code}: {payload.get('error')}")
-    return payload["data"]
+    try:
+        payload = resp.json()
+    except Exception as e:
+        raise RailRadarError(f"Failed to parse RailRadar response for {station_code}: {e}")
+
+    if not isinstance(payload, dict) or not payload.get("success"):
+        error_msg = payload.get("error") if isinstance(payload, dict) else "Non-dict response"
+        raise RailRadarError(f"RailRadar error for {station_code}: {error_msg}")
+    return payload.get("data") or {}
 
 
 def live_board_to_visits(station_code: str, board: dict) -> List[Visit]:
+    if not isinstance(board, dict):
+        return []
     visits: List[Visit] = []
     for entry in board.get("trains", []):
         train = entry.get("train", {}) or {}

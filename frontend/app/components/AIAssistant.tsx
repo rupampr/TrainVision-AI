@@ -8,6 +8,7 @@ interface Props {
   onClose: () => void;
   apiUrl?: string;
   onSelectTrain?: (trainId: string, stationId: string) => void;
+  initialQuery?: string;
 }
 
 export default function AIAssistant({
@@ -15,9 +16,18 @@ export default function AIAssistant({
   onClose,
   apiUrl = "http://127.0.0.1:8000",
   onSelectTrain,
+  initialQuery,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"recommendations" | "chat">("recommendations");
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
+
+  // Sync initialQuery if passed
+  useEffect(() => {
+    if (initialQuery && isOpen) {
+      setActiveTab("chat");
+      setInputQuery(initialQuery);
+    }
+  }, [initialQuery, isOpen]);
   
   // Recommendations state
   const [recommendations, setRecommendations] = useState<AIRecommendation[]>([]);
@@ -39,16 +49,30 @@ export default function AIAssistant({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const fetchApi = async (path: string, options?: RequestInit): Promise<Response> => {
+    if (apiUrl && apiUrl !== "http://127.0.0.1:8000") {
+      return fetch(`${apiUrl}${path}`, options);
+    }
+    try {
+      const res = await fetch(`/api/backend${path}`, options);
+      if (res.status !== 404) return res;
+    } catch {
+      // proxy fallback
+    }
+    const host = typeof window !== "undefined" && window.location.hostname === "localhost" ? "localhost" : "127.0.0.1";
+    return fetch(`http://${host}:8000${path}`, options);
+  };
+
   // Fetch AI configuration status
   useEffect(() => {
-    fetch(`${apiUrl}/ai/status`)
+    fetchApi("/ai/status")
       .then((res) => {
         if (!res.ok) throw new Error(`Status ${res.status}`);
         return res.json();
       })
       .then((data) => setAiStatus(data))
       .catch((err) => {
-        console.error("AI Status fetch error:", err);
+        console.warn("AI Status fetch warning:", err);
       });
   }, [apiUrl]);
 
@@ -57,7 +81,7 @@ export default function AIAssistant({
     setLoadingRecs(true);
     setRecsError(null);
     try {
-      const res = await fetch(`${apiUrl}/recommendations`);
+      const res = await fetchApi("/recommendations");
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
         throw new Error(errData?.detail || `Server returned ${res.status}`);
@@ -103,7 +127,7 @@ export default function AIAssistant({
     setChatError(null);
 
     try {
-      const res = await fetch(`${apiUrl}/ai/analyze-schedule`, {
+      const res = await fetchApi("/ai/analyze-schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: textToSend.trim() }),

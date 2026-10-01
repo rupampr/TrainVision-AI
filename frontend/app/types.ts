@@ -45,3 +45,25 @@ export interface AIStatus {
   configured: boolean;
   model: string;
 }
+
+export interface TrainPosition {
+  lat?: number;
+  lng?: number;
+  speed_kmh?: number;
+  avg_speed_kmh?: number;
+  bearing?: number;
+  status?: string;
+  delay_minutes?: number;
+  station_code?: string;
+  fetched_at?: number;
+  error?: string;
+}
+
+export interface TrainPositionsMap {
+  [train_id: string]: TrainPosition;
+}
+
+export interface WebSocketPositionMessage {
+  type: string;
+  data: TrainPositionsMap;
+}
