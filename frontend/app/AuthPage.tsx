@@ -1,54 +1,33 @@
-
 'use client';
 
-import { useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { SignIn, SignUp } from '@clerk/nextjs';
+import { useRouter } from 'next/navigation';
 
-type AuthMode = 'sign-in' | 'sign-up';
+interface AuthConfig {
+    googleClientId: string;
+    hasGoogleSecret: boolean;
+    resendConfigured: boolean;
+}
 
-const clerkAppearance = {
-    variables: {
-        colorPrimary: '#3B82F6',
-        colorBackground: '#0C1425',
-        colorForeground: '#F1F5F9',
-        colorMutedForeground: '#94A3B8',
-        colorInputBackground: '#111C30',
-        colorInputForeground: '#F1F5F9',
-        borderRadius: '0.75rem',
-        fontFamily: 'inherit',
-    },
-    elements: {
-        rootBox: 'w-full',
-        card: '!w-full !max-w-none !bg-transparent !shadow-none !p-0 !gap-4',
-        header: 'hidden',
-        socialButtonsBlockButton:
-            '!flex !min-h-12 !w-full !items-center !justify-center !gap-3 !rounded-xl !border !border-slate-300/20 !bg-slate-100 !text-slate-900 !opacity-100 shadow-md transition hover:!bg-white',
-
-        socialButtonsBlockButtonText:
-            '!text-sm !font-semibold !text-slate-900',
-
-        socialButtonsIconButton:
-            '!border-slate-300/20 !bg-slate-100 !text-slate-900',
-
-        dividerLine: '!bg-white/10',
-        dividerText: '!text-slate-400',
-        formFieldLabel: '!text-slate-300 !text-sm !font-medium',
-        formFieldInput:
-            '!rounded-xl !border-white/10 !bg-[#111C30] focus:!border-blue-500 focus:!ring-2 focus:!ring-blue-500/20',
-        formButtonPrimary:
-            '!rounded-xl !bg-blue-600 hover:!bg-blue-500 !shadow-lg !shadow-blue-950/40',
-        footerAction: '!text-slate-400',
-        footerActionLink:
-            '!text-blue-400 hover:!text-blue-300',
-        dividerLine: '!bg-white/10',
-        dividerText: '!text-slate-500',
-        identityPreview: '!border-white/10 !bg-white/5',
-        formFieldAction:
-            '!text-blue-400 hover:!text-blue-300',
-        alert: '!rounded-xl',
-    },
-};
+declare global {
+    interface Window {
+        google?: {
+            accounts?: {
+                id?: {
+                    initialize: (opts: {
+                        client_id: string;
+                        callback: (resp: { credential?: string }) => void;
+                    }) => void;
+                    renderButton: (
+                        parent: HTMLElement,
+                        options: Record<string, unknown>
+                    ) => void;
+                };
+            };
+        };
+    }
+}
 
 const stations = [
     {
@@ -76,33 +55,195 @@ const features = [
         icon: '◈',
         title: 'Intelligent scheduling',
         description:
-            'Optimize timetables with scheduling algorithms.',
+            'Optimize timetables with Greedy & ILP scheduling algorithms.',
     },
     {
         icon: '◎',
         title: 'Real-time monitoring',
         description:
-            'Track stations, schedules, and operational conflicts.',
+            'Track stations, WebSocket radar telemetry, and operational conflicts.',
     },
     {
         icon: '↗',
-        title: 'Actionable insights',
+        title: 'Simulation & AI insights',
         description:
-            'Make better decisions with clear operational views.',
+            'Test What-If disruptions and query Gemini AI for conflict resolutions.',
     },
 ];
 
+const ERROR_MESSAGES: Record<string, string> = {
+    google_client_id_missing:
+        'Google Client ID is not configured yet. Add GOOGLE_CLIENT_ID to frontend/.env.',
+    google_client_secret_missing:
+        'Google Client Secret is not configured for redirect flow.',
+    invalid_oauth_state:
+        'OAuth security state expired or mismatched. Please try signing in again.',
+    google_token_exchange_failed:
+        'Google rejected the authorization code. Verify your redirect URI in Google Cloud Console.',
+    google_email_unverified:
+        'Your Google account email must be verified before signing in.',
+    google_auth_exception:
+        'Unexpected error during Google sign-in. Please try again.',
+};
+
 export default function AuthPage() {
-    const [mode, setMode] = useState<AuthMode>('sign-in');
+    const router = useRouter();
+    const googleBtnRef = useRef<HTMLDivElement>(null);
+
+    const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+    const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
+    const [email, setEmail] = useState<string>('');
+    const [otp, setOtp] = useState<string>('');
+    const [loading, setLoading] = useState<boolean>(false);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [infoMsg, setInfoMsg] = useState<string | null>(null);
+
+    // Load auth configuration & surface any OAuth redirect error
+    useEffect(() => {
+        let cancelled = false;
+
+        const params = new URLSearchParams(window.location.search);
+        const err = params.get('error');
+        if (err) {
+            queueMicrotask(() => {
+                if (!cancelled) {
+                    setErrorMsg(ERROR_MESSAGES[err] || `Sign-in failed: ${err}`);
+                }
+            });
+        }
+
+        fetch('/api/auth/config')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((cfg: AuthConfig | null) => {
+                if (!cancelled && cfg) setAuthConfig(cfg);
+            })
+            .catch(() => {
+                // ignore config load error
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    // When Client ID is provided WITHOUT Client Secret, render Google Identity Services (ID Token) button
+    useEffect(() => {
+        if (!authConfig?.googleClientId || authConfig.hasGoogleSecret) return;
+        let cancelled = false;
+
+        const initGsi = () => {
+            if (cancelled || !window.google?.accounts?.id || !googleBtnRef.current) return;
+            window.google.accounts.id.initialize({
+                client_id: authConfig.googleClientId,
+                callback: async (resp: { credential?: string }) => {
+                    if (!resp.credential) return;
+                    setLoading(true);
+                    setErrorMsg(null);
+                    try {
+                        const res = await fetch('/api/auth/google/token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ credential: resp.credential }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            throw new Error(data?.error || 'Google verification failed');
+                        }
+                        router.push(data.redirectTo || '/home');
+                        router.refresh();
+                    } catch (err: unknown) {
+                        setErrorMsg(err instanceof Error ? err.message : String(err));
+                    } finally {
+                        setLoading(false);
+                    }
+                },
+            });
+            googleBtnRef.current.innerHTML = '';
+            window.google.accounts.id.renderButton(googleBtnRef.current, {
+                theme: 'outline',
+                size: 'large',
+                width: 380,
+                text: 'continue_with',
+                shape: 'rectangular',
+            });
+        };
+
+        if (window.google?.accounts?.id) {
+            initGsi();
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        script.defer = true;
+        script.onload = initGsi;
+        document.head.appendChild(script);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [authConfig, router]);
+
+    const handleMissingGoogleConfig = () => {
+        setErrorMsg(
+            'Google Client ID is not configured. Add GOOGLE_CLIENT_ID (and GOOGLE_CLIENT_SECRET for redirect OAuth) in frontend/.env.'
+        );
+    };
+
+    const handleSendOtp = async (e?: FormEvent) => {
+        if (e) e.preventDefault();
+        setErrorMsg(null);
+        setInfoMsg(null);
+        setLoading(true);
+        try {
+            const res = await fetch('/api/auth/otp/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.error || 'Failed to send verification code');
+            }
+            setOtpStep('verify');
+            setInfoMsg(data.message || `6-digit verification code sent to ${email}`);
+        } catch (err: unknown) {
+            setErrorMsg(err instanceof Error ? err.message : String(err));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleVerifyOtp = async (e: FormEvent) => {
+        e.preventDefault();
+        setErrorMsg(null);
+        setLoading(true);
+        try {
+            const res = await fetch('/api/auth/otp/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, otp }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.error || 'Invalid verification code');
+            }
+            router.push(data.redirectTo || '/home');
+            router.refresh();
+        } catch (err: unknown) {
+            setErrorMsg(err instanceof Error ? err.message : String(err));
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <main className="relative min-h-screen overflow-hidden bg-[#070D1A] text-white selection:bg-blue-500/30">
             {/* Background effects */}
             <div className="pointer-events-none absolute inset-0">
                 <div className="absolute -left-40 -top-40 h-96 w-96 rounded-full bg-blue-600/15 blur-[120px]" />
-
                 <div className="absolute -bottom-40 -right-20 h-96 w-96 rounded-full bg-indigo-600/15 blur-[120px]" />
-
                 <div
                     className="absolute inset-0 opacity-[0.06]"
                     style={{
@@ -115,20 +256,15 @@ export default function AuthPage() {
 
             {/* Header */}
             <header className="relative z-10 mx-auto flex max-w-7xl items-center justify-between px-6 py-6 sm:px-10 lg:px-14">
-                <Link
-                    href="/"
-                    className="group flex items-center gap-3"
-                >
+                <Link href="/" className="group flex items-center gap-3">
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-blue-400/30 bg-blue-500/10 text-2xl shadow-lg shadow-blue-950/30 transition group-hover:bg-blue-500/20">
                         🚆
                     </div>
 
                     <div>
                         <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
-                            TrainVision
-                            <span className="text-blue-400">-AI</span>
+                            TrainVision<span className="text-blue-400">-AI</span>
                         </h1>
-
                         <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">
                             Intelligent Rail Systems
                         </p>
@@ -163,10 +299,9 @@ export default function AuthPage() {
                             </h2>
 
                             <p className="mt-5 max-w-md text-sm leading-7 text-slate-400">
-                                Optimize train timetables, identify
-                                conflicts, and monitor railway
-                                operations through one intelligent
-                                scheduling platform.
+                                Optimize train timetables, identify conflicts,
+                                and monitor railway operations through one
+                                intelligent scheduling platform.
                             </p>
                         </div>
 
@@ -176,12 +311,8 @@ export default function AuthPage() {
 
                             <div className="relative flex items-center justify-between gap-3">
                                 <div>
-                                    <p className="text-xs text-slate-500">
-                                        SCHEDULING ENGINE
-                                    </p>
-                                    <p className="mt-1 text-lg font-semibold">
-                                        Network overview
-                                    </p>
+                                    <p className="text-xs text-slate-500">SCHEDULING ENGINE</p>
+                                    <p className="mt-1 text-lg font-semibold">Network overview</p>
                                 </div>
 
                                 <span className="whitespace-nowrap rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-300">
@@ -192,13 +323,9 @@ export default function AuthPage() {
 
                             <div className="relative mt-7 space-y-5">
                                 {stations.map((station, index) => (
-                                    <div
-                                        key={station.code}
-                                        className="flex items-center gap-3"
-                                    >
+                                    <div key={station.code} className="flex items-center gap-3">
                                         <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-blue-400/20 bg-blue-400/10 text-[10px] font-bold text-blue-300">
                                             {station.code}
-
                                             {index < stations.length - 1 && (
                                                 <span className="absolute left-1/2 top-9 h-5 w-px bg-blue-400/30" />
                                             )}
@@ -209,7 +336,6 @@ export default function AuthPage() {
                                                 <span className="truncate text-slate-300">
                                                     {station.name}
                                                 </span>
-
                                                 <span className="shrink-0 text-slate-500">
                                                     {station.time}
                                                 </span>
@@ -218,9 +344,7 @@ export default function AuthPage() {
                                             <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/5">
                                                 <div
                                                     className="h-full rounded-full bg-linear-to-r from-blue-500 to-indigo-400"
-                                                    style={{
-                                                        width: station.width,
-                                                    }}
+                                                    style={{ width: station.width }}
                                                 />
                                             </div>
                                         </div>
@@ -229,26 +353,21 @@ export default function AuthPage() {
                             </div>
 
                             <p className="mt-6 text-[11px] text-slate-500">
-                                Illustrative network visualization
+                                South Eastern Railway Corridor &middot; HWH &middot; SRC &middot; KGP
                             </p>
                         </div>
 
                         {/* Features */}
                         <div className="relative space-y-5">
                             {features.map((feature) => (
-                                <div
-                                    key={feature.title}
-                                    className="flex gap-4"
-                                >
+                                <div key={feature.title} className="flex gap-4">
                                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-400/20 bg-blue-400/8 text-xl text-blue-300">
                                         {feature.icon}
                                     </div>
-
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-200">
                                             {feature.title}
                                         </h3>
-
                                         <p className="mt-1 text-xs leading-5 text-slate-400">
                                             {feature.description}
                                         </p>
@@ -258,24 +377,20 @@ export default function AuthPage() {
                         </div>
 
                         <div className="relative mt-10 border-t border-white/10 pt-5 text-xs text-slate-500">
-                            Built for a smarter, more connected
-                            railway network.
+                            Built for a smarter, more connected railway network.
                         </div>
                     </aside>
 
-                    {/* Right panel: Authentication */}
+                    {/* Right panel: Google OAuth + Resend Email OTP */}
                     <section className="flex min-w-0 flex-col justify-center px-5 py-9 sm:px-10 sm:py-12 lg:px-10 xl:px-14">
                         {/* Mobile branding */}
                         <div className="mb-8 text-center lg:hidden">
                             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-blue-400/20 bg-blue-500/10 text-3xl">
                                 🚆
                             </div>
-
                             <h2 className="text-2xl font-bold">
-                                TrainVision
-                                <span className="text-blue-400">-AI</span>
+                                TrainVision<span className="text-blue-400">-AI</span>
                             </h2>
-
                             <p className="mt-2 text-sm text-slate-400">
                                 Intelligent railway scheduling
                             </p>
@@ -283,78 +398,198 @@ export default function AuthPage() {
 
                         <div className="mb-7">
                             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-400">
-                                Your workspace
+                                Controller Access
                             </p>
-
                             <h2 className="mt-3 text-3xl font-bold tracking-tight">
-                                {mode === 'sign-in'
-                                    ? 'Welcome back'
-                                    : 'Create your account'}
+                                Sign in to TrainVision
                             </h2>
-
                             <p className="mt-3 text-sm leading-6 text-slate-400">
-                                {mode === 'sign-in'
-                                    ? 'Sign in to access your railway scheduling dashboard.'
-                                    : 'Get started with intelligent railway operations.'}
+                                Authenticate with Google OAuth or verify your email.
                             </p>
                         </div>
 
-                        {/* Sign-in / sign-up selector */}
-                        <div className="mb-7 grid grid-cols-2 rounded-xl border border-white/8 bg-white/3 p-1">
+                        {errorMsg && (
+                            <div
+                                role="alert"
+                                className="mb-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-300"
+                            >
+                                {errorMsg}
+                            </div>
+                        )}
+
+                        {infoMsg && (
+                            <div
+                                role="status"
+                                className="mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-300"
+                            >
+                                {infoMsg}
+                            </div>
+                        )}
+
+                        {/* Google OAuth Sign-In */}
+                        {authConfig?.googleClientId && !authConfig.hasGoogleSecret ? (
+                            <div className="flex justify-center">
+                                <div ref={googleBtnRef} className="w-full flex justify-center" />
+                            </div>
+                        ) : authConfig?.googleClientId ? (
+                            <a
+                                href="/api/auth/google"
+                                className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl border border-slate-300/20 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-900 shadow-md transition hover:bg-white"
+                            >
+                                <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path
+                                        fill="#4285F4"
+                                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                                    />
+                                    <path
+                                        fill="#34A853"
+                                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                                    />
+                                    <path
+                                        fill="#FBBC05"
+                                        d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                                    />
+                                    <path
+                                        fill="#EA4335"
+                                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                                    />
+                                </svg>
+                                Continue with Google
+                            </a>
+                        ) : (
                             <button
                                 type="button"
-                                onClick={() => setMode('sign-in')}
-                                aria-pressed={mode === 'sign-in'}
-                                className={`rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-200 ${mode === 'sign-in'
-                                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-950/40'
-                                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                                    }`}
+                                onClick={handleMissingGoogleConfig}
+                                disabled={loading}
+                                className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl border border-slate-300/20 bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-900 shadow-md transition hover:bg-white cursor-pointer disabled:opacity-60"
                             >
-                                Sign in
+                                <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path
+                                        fill="#4285F4"
+                                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                                    />
+                                    <path
+                                        fill="#34A853"
+                                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                                    />
+                                    <path
+                                        fill="#FBBC05"
+                                        d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                                    />
+                                    <path
+                                        fill="#EA4335"
+                                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                                    />
+                                </svg>
+                                Continue with Google
                             </button>
+                        )}
 
-                            <button
-                                type="button"
-                                onClick={() => setMode('sign-up')}
-                                aria-pressed={mode === 'sign-up'}
-                                className={`rounded-lg px-4 py-3 text-sm font-semibold transition-all duration-200 ${mode === 'sign-up'
-                                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-950/40'
-                                    : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                                    }`}
-                            >
-                                Create account
-                            </button>
+                        {/* Divider */}
+                        <div className="my-6 flex items-center gap-3">
+                            <div className="h-px flex-1 bg-white/10" />
+                            <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
+                                or email OTP
+                            </span>
+                            <div className="h-px flex-1 bg-white/10" />
                         </div>
 
-                        {/* Clerk authentication */}
-                        <div className="auth-clerk w-full">
-                            {mode === 'sign-in' ? (
-                                <SignIn
-                                    key="sign-in"
-                                    routing="hash"
-                                    forceRedirectUrl="/home"
-                                    signUpUrl="/?mode=sign-up"
-                                    appearance={clerkAppearance}
-                                />
-                            ) : (
-                                <SignUp
-                                    key="sign-up"
-                                    routing="hash"
-                                    forceRedirectUrl="/home"
-                                    signInUrl="/"
-                                    appearance={clerkAppearance}
-                                />
-                            )}
-                        </div>
+                        {/* Resend Email OTP Form */}
+                        {otpStep === 'email' ? (
+                            <form onSubmit={handleSendOtp} className="space-y-4">
+                                <div>
+                                    <label
+                                        htmlFor="otp-email"
+                                        className="mb-1.5 block text-xs font-medium text-slate-300"
+                                    >
+                                        Work or Controller Email
+                                    </label>
+                                    <input
+                                        id="otp-email"
+                                        type="email"
+                                        required
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        placeholder="controller@railops.in"
+                                        disabled={loading}
+                                        className="w-full rounded-xl border border-white/10 bg-[#111C30] px-4 py-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60"
+                                    />
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={loading || !email.trim()}
+                                    className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {loading ? 'Sending code...' : 'Send 6-Digit Code'}
+                                </button>
+                            </form>
+                        ) : (
+                            <form onSubmit={handleVerifyOtp} className="space-y-4">
+                                <div>
+                                    <div className="mb-1.5 flex items-center justify-between">
+                                        <label
+                                            htmlFor="otp-code"
+                                            className="text-xs font-medium text-slate-300"
+                                        >
+                                            6-Digit Verification Code
+                                        </label>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setOtpStep('email');
+                                                setOtp('');
+                                                setInfoMsg(null);
+                                                setErrorMsg(null);
+                                            }}
+                                            className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
+                                        >
+                                            Change email
+                                        </button>
+                                    </div>
+
+                                    <input
+                                        id="otp-code"
+                                        type="text"
+                                        inputMode="numeric"
+                                        pattern="\d{6}"
+                                        maxLength={6}
+                                        required
+                                        value={otp}
+                                        onChange={(e) =>
+                                            setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))
+                                        }
+                                        placeholder="123456"
+                                        disabled={loading}
+                                        className="w-full rounded-xl border border-white/10 bg-[#111C30] px-4 py-3 text-center font-mono text-xl font-bold tracking-[0.5em] text-cyan-300 placeholder:text-slate-600 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-60"
+                                    />
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={loading || otp.length !== 6}
+                                    className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-950/40 transition hover:bg-blue-500 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {loading ? 'Verifying...' : 'Verify & Enter Control Center'}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    disabled={loading}
+                                    onClick={() => handleSendOtp()}
+                                    className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/10 cursor-pointer disabled:opacity-60"
+                                >
+                                    Resend verification code
+                                </button>
+                            </form>
+                        )}
 
                         {/* Footer */}
                         <div className="mt-8 border-t border-white/8 pt-5 text-center">
                             <p className="text-xs leading-5 text-slate-500">
-                                By continuing, you agree to use
-                                TrainVision-AI responsibly and securely.
+                                Secured with signed HTTP-only sessions &middot; Google OAuth
                             </p>
-
-                            <p className="mt-4 text-xs text-slate-600">
+                            <p className="mt-3 text-xs text-slate-600">
                                 TrainVision-AI · Intelligent Railway Scheduling
                             </p>
                         </div>

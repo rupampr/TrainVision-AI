@@ -1,12 +1,11 @@
-
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth";
 import AuthPage from "./AuthPage";
 
 export default async function RootPage() {
-  const { userId } = await auth();
+  const session = await getSession();
 
-  if (userId) {
+  if (session) {
     redirect("/home");
   }
 

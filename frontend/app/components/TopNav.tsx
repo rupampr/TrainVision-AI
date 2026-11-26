@@ -2,8 +2,15 @@
 "use client";
 
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 import { DataSourceInfo } from "../types";
+
+interface SessionUser {
+  email: string;
+  name: string;
+  picture?: string;
+  provider: "google" | "email";
+}
 
 export type ConsoleViewMode = "schedule" | "radar" | "analytics" | "simulation";
 
@@ -32,8 +39,32 @@ export default function TopNav({
   isRefreshingTrains = false,
   onOpenAuditLog,
 }: Props) {
-  const { isLoaded, isSignedIn } = useUser();
+  const router = useRouter();
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [time, setTime] = useState<string>("--:--:--");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/session")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { authenticated?: boolean; user?: SessionUser | null } | null) => {
+        if (!cancelled && data?.authenticated && data.user) {
+          setUser(data.user);
+        }
+      })
+      .catch(() => {
+        // ignore session fetch warning
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/");
+    router.refresh();
+  };
 
   useEffect(() => {
     const tick = () => {
@@ -327,16 +358,29 @@ export default function TopNav({
           </span>
         </div>
 
-        {/* Clerk User Profile and Sign Out */}
-        {isLoaded && isSignedIn && (
-          <UserButton
-            afterSignOutUrl="/"
-            appearance={{
-              elements: {
-                avatarBox: "w-9 h-9",
-              },
-            }}
-          />
+        {/* Authenticated User Profile & Sign Out */}
+        {user && (
+          <div className="flex items-center gap-2 pl-1">
+            <div
+              title={`${user.name} (${user.email}) via ${user.provider}`}
+              className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-deep/80 border border-border text-xs"
+            >
+              <span className="w-6 h-6 rounded-full bg-cyan/20 border border-cyan/40 text-cyan font-mono font-bold flex items-center justify-center uppercase text-[11px]">
+                {(user.name || user.email).slice(0, 1)}
+              </span>
+              <span className="text-primary font-medium max-w-[120px] truncate">
+                {user.name}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="px-2.5 py-1.5 rounded-lg bg-panel border border-border hover:border-red/40 hover:bg-red/10 text-secondary hover:text-red text-xs font-medium transition-colors cursor-pointer"
+            >
+              Sign out
+            </button>
+          </div>
         )}
       </div>
     </header>

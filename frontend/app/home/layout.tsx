@@ -1,15 +1,14 @@
-
-import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth";
 
 export default async function HomeLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
-    const { userId } = await auth();
+    const session = await getSession();
 
-    if (!userId) {
+    if (!session) {
         redirect("/");
     }
 
