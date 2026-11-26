@@ -10,7 +10,7 @@ A railway platform-scheduling, live-telemetry, analytics, and disruption-simulat
 ┌───────────────────────────┐      REST / WS       ┌──────────────────────────┐      SQL      ┌──────────────────┐
 │         Frontend          │◄────────────────────►│         Backend          │◄────────────►│    PostgreSQL    │
 │  Next.js 16 + React 19    │                      │        (FastAPI)         │              │ overrides +      │
-│  Clerk Auth + Tailwind v4 │                      │  Greedy & ILP optimizers │              │ audit_log        │
+│  Google OAuth + Resend    │                      │  Greedy & ILP optimizers │              │ audit_log        │
 └───────────────────────────┘                      │  Analytics & Simulator   │              └──────────────────┘
                                                    │  WebSocket + Gemini AI   │
                                                    └────────────┬─────────────┘
@@ -54,7 +54,7 @@ A railway platform-scheduling, live-telemetry, analytics, and disruption-simulat
 | WebSocket Live Track Radar & telemetry | Done | `backend/train_positions.py`, `backend/websocket_manager.py`, `LiveRadar.tsx` |
 | Analytics & Platform Occupancy Gantt chart | Done | `backend/simulation_analytics.py`, `AnalyticsView.tsx` |
 | What-If Disruption Simulator (closures, delays, extra trains) | Done | `backend/simulation_analytics.py`, `SimulationView.tsx` |
-| Authentication & protected console routes (Clerk) | Done | `frontend/proxy.ts`, `AuthPage.tsx`, `home/layout.tsx` |
+| Custom Auth (Google OAuth + Resend Email OTP) | Done | `frontend/lib/auth.ts`, `api/auth/*`, `AuthPage.tsx` |
 
 ---
 
@@ -78,16 +78,18 @@ Trainvision-AI/
 │   ├── data/trains.json            # Station config (HWH/SRC/KGP) & offline demo dataset
 │   ├── tests/                      # Backend verification tests
 │   └── requirements.txt
-└── frontend/                       # Next.js 16 + React 19 + Tailwind CSS v4 + Clerk
+└── frontend/                       # Next.js 16 + React 19 + Tailwind CSS v4
     ├── next.config.ts              # Rewrites /api/backend/* -> http://127.0.0.1:8000/*
-    ├── proxy.ts                    # Clerk middleware
+    ├── proxy.ts                    # Cookie-based route protection for /home
+    ├── lib/auth.ts                 # HMAC session & OTP challenge signing/verification
     └── app/
-        ├── page.tsx                # Public landing & Clerk auth redirect
-        ├── AuthPage.tsx            # Sign-in / Sign-up UI
+        ├── page.tsx                # Public landing & session redirect
+        ├── AuthPage.tsx            # Google OAuth + Resend 6-digit Email OTP UI
+        ├── api/auth/*              # /google, /google/callback, /google/token, /otp/*, /session, /logout
         ├── types.ts                # Shared TypeScript interfaces
         ├── utils/api.ts            # Fetch + WebSocket helpers
         ├── home/
-        │   ├── layout.tsx          # Server-side Clerk auth guard
+        │   ├── layout.tsx          # Server-side HMAC session guard
         │   └── page.tsx            # Main Operations Control Center
         └── components/
             ├── TopNav.tsx          # Algorithm & view switcher, Data Source, Audit Log, AI toggle
@@ -121,7 +123,7 @@ python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```bash
 cd frontend
 npm install
-# Set Clerk keys in frontend/.env
+# Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, RESEND_API_KEY, AUTH_SECRET in frontend/.env (see .env.example)
 npm run dev
 # On Windows PowerShell if npm.ps1 is blocked by execution policy:
 # npm.cmd run dev
