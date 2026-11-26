@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useEffect, FormEvent } from "react";
-import TopNav from "../components/TopNav";
+import TopNav, { ConsoleViewMode } from "../components/TopNav";
 import ScheduleView from "../components/ScheduleView";
 import ControlPanel from "../components/ControlPanel";
 import AIAssistant from "../components/AIAssistant";
 import LiveRadar from "../components/LiveRadar";
-import { Station, ScheduleEntry, Conflict } from "../types";
+import AnalyticsView from "../components/AnalyticsView";
+import SimulationView from "../components/SimulationView";
+import AuditLogModal from "../components/AuditLogModal";
+import { Station, ScheduleEntry, Conflict, DataSourceInfo } from "../types";
 import { fetchBackend } from "../utils/api";
 
 const INITIAL_STATIONS: Station[] = [
@@ -20,15 +23,31 @@ export default function ControlCenter() {
     const [stations, setStations] = useState<Station[]>(INITIAL_STATIONS);
     const [schedule, setSchedule] = useState<ScheduleEntry[]>([]);
     const [conflicts, setConflicts] = useState<Conflict[]>([]);
+    const [scheduleVersion, setScheduleVersion] = useState<string>("");
+    const [dataSource, setDataSource] = useState<DataSourceInfo | null>(null);
+    const [isRefreshingTrains, setIsRefreshingTrains] = useState<boolean>(false);
 
     const [currentStation, setCurrentStation] = useState<string>("ALL");
     const [overrideVisit, setOverrideVisit] = useState<string>("");
     const [overridePlatform, setOverridePlatform] = useState<string>("1");
     const [isAIOpen, setIsAIOpen] = useState<boolean>(false);
+    const [isAuditOpen, setIsAuditOpen] = useState<boolean>(false);
     const [aiInitialQuery, setAiInitialQuery] = useState<string>("");
-    const [viewMode, setViewMode] = useState<"schedule" | "radar">("schedule");
+    const [viewMode, setViewMode] = useState<ConsoleViewMode>("schedule");
 
-    // Load Stations
+    const fetchDataSource = async () => {
+        try {
+            const res = await fetchBackend("/data-source");
+            if (res.ok) {
+                const info: DataSourceInfo = await res.json();
+                setDataSource(info);
+            }
+        } catch (err) {
+            console.warn("Could not load data source status:", err);
+        }
+    };
+
+    // Load Stations & Data Source status
     useEffect(() => {
         fetchBackend("/stations")
             .then((res) => {
@@ -41,10 +60,19 @@ export default function ControlCenter() {
                 }
             })
             .catch((err) => console.warn("Could not refresh stations, keeping defaults:", err));
+
+        fetchBackend("/data-source")
+            .then((res) => (res.ok ? res.json() : null))
+            .then((info: DataSourceInfo | null) => {
+                if (info) setDataSource(info);
+            })
+            .catch((err) => console.warn("Could not load data source status:", err));
     }, []);
 
-    // Load Schedule (Re-runs automatically when `algorithm` state changes)
+    // Load Schedule (re-runs when `algorithm` changes, polls every 15s)
     useEffect(() => {
+        let cancelled = false;
+
         const fetchSchedule = async () => {
             try {
                 const res = await fetchBackend(`/schedule?algorithm=${algorithm}`);
@@ -53,12 +81,14 @@ export default function ControlCenter() {
                     return;
                 }
                 const data = await res.json();
-                if (data && Array.isArray(data.schedule)) {
+                if (!cancelled && data && Array.isArray(data.schedule)) {
                     setSchedule(data.schedule);
                     setConflicts(data.conflicts || []);
+                    setScheduleVersion(data.generated_at || "");
 
-                    if (!overrideVisit && data.schedule.length > 0) {
-                        setOverrideVisit(`${data.schedule[0].train_id}|${data.schedule[0].station_id}`);
+                    if (data.schedule.length > 0) {
+                        const firstKey = `${data.schedule[0].train_id}|${data.schedule[0].station_id}`;
+                        setOverrideVisit((prev) => prev || firstKey);
                     }
                 }
             } catch (err) {
@@ -68,8 +98,23 @@ export default function ControlCenter() {
 
         fetchSchedule();
         const interval = setInterval(fetchSchedule, 15000);
-        return () => clearInterval(interval);
-    }, [overrideVisit, algorithm]);
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [algorithm]);
+
+    const applyScheduleResponse = (data: {
+        schedule?: ScheduleEntry[];
+        conflicts?: Conflict[];
+        generated_at?: string;
+    }) => {
+        if (data && Array.isArray(data.schedule)) {
+            setSchedule(data.schedule);
+            setConflicts(data.conflicts || []);
+            setScheduleVersion(data.generated_at || "");
+        }
+    };
 
     const handleOverrideSubmit = async (e: FormEvent) => {
         e.preventDefault();
@@ -90,13 +135,25 @@ export default function ControlCenter() {
 
             if (res.ok) {
                 const data = await res.json();
-                if (data && Array.isArray(data.schedule)) {
-                    setSchedule(data.schedule);
-                    setConflicts(data.conflicts || []);
-                }
+                applyScheduleResponse(data);
             }
         } catch (err) {
             console.error("Failed to apply override:", err);
+        }
+    };
+
+    const handleDeleteOverride = async (trainId: string, stationId: string) => {
+        try {
+            const res = await fetchBackend(
+                `/override/${encodeURIComponent(trainId)}/${encodeURIComponent(stationId)}?algorithm=${algorithm}`,
+                { method: "DELETE" }
+            );
+            if (res.ok) {
+                const data = await res.json();
+                applyScheduleResponse(data);
+            }
+        } catch (err) {
+            console.error("Failed to clear override:", err);
         }
     };
 
@@ -105,19 +162,43 @@ export default function ControlCenter() {
             const res = await fetchBackend(`/reset?algorithm=${algorithm}`, { method: "POST" });
             if (res.ok) {
                 const data = await res.json();
-                if (data && Array.isArray(data.schedule)) {
-                    setSchedule(data.schedule);
-                    setConflicts(data.conflicts || []);
-                }
+                applyScheduleResponse(data);
             }
         } catch (err) {
             console.error("Failed to reset overrides:", err);
         }
     };
 
+    const handleRefreshTrains = async () => {
+        if (isRefreshingTrains) return;
+        setIsRefreshingTrains(true);
+        try {
+            await fetchBackend("/trains/refresh", { method: "POST" });
+            await fetchDataSource();
+            const schedRes = await fetchBackend(`/schedule?algorithm=${algorithm}`);
+            if (schedRes.ok) {
+                const data = await schedRes.json();
+                applyScheduleResponse(data);
+            }
+        } catch (err) {
+            console.error("Failed to refresh live trains:", err);
+        } finally {
+            setIsRefreshingTrains(false);
+        }
+    };
+
     // Filter data based on selected station
     const filteredSchedule = schedule.filter((e) => currentStation === "ALL" || e.station_id === currentStation);
     const filteredConflicts = conflicts.filter((c) => currentStation === "ALL" || c.station_id === currentStation);
+
+    const viewLabel =
+        viewMode === "radar"
+            ? "Live Track Radar (WS)"
+            : viewMode === "analytics"
+            ? "Analytics & Platform Gantt"
+            : viewMode === "simulation"
+            ? "What-If Disruption Simulator"
+            : "Timetable & Conflicts";
 
     return (
         <div className="min-h-screen bg-deep text-primary font-sans flex flex-col antialiased">
@@ -128,6 +209,10 @@ export default function ControlCenter() {
                 isAIOpen={isAIOpen}
                 viewMode={viewMode}
                 setViewMode={setViewMode}
+                dataSource={dataSource}
+                onRefreshTrains={handleRefreshTrains}
+                isRefreshingTrains={isRefreshingTrains}
+                onOpenAuditLog={() => setIsAuditOpen(true)}
             />
 
             {/* Station Navigation Tab Strip */}
@@ -186,9 +271,7 @@ export default function ControlCenter() {
                 {/* Console View Indicator */}
                 <div className="hidden md:flex items-center gap-2 text-xs font-mono text-dim">
                     <span>Active View:</span>
-                    <span className="text-cyan font-semibold uppercase">
-                        {viewMode === "radar" ? "Live Track Radar (WS)" : "Timetable & Conflicts"}
-                    </span>
+                    <span className="text-cyan font-semibold uppercase">{viewLabel}</span>
                 </div>
             </nav>
 
@@ -202,6 +285,21 @@ export default function ControlCenter() {
                             setAiInitialQuery(query);
                             setIsAIOpen(true);
                         }}
+                    />
+                ) : viewMode === "analytics" ? (
+                    <AnalyticsView
+                        algorithm={algorithm}
+                        setAlgorithm={setAlgorithm}
+                        currentStation={currentStation}
+                        stations={stations}
+                        scheduleVersion={scheduleVersion}
+                        onSelectTrain={(trainId, stationId) => setOverrideVisit(`${trainId}|${stationId}`)}
+                    />
+                ) : viewMode === "simulation" ? (
+                    <SimulationView
+                        algorithm={algorithm}
+                        stations={stations}
+                        schedule={schedule}
                     />
                 ) : (
                     <ScheduleView schedule={filteredSchedule} />
@@ -217,14 +315,22 @@ export default function ControlCenter() {
                     setOverridePlatform={setOverridePlatform}
                     onSubmit={handleOverrideSubmit}
                     onReset={handleReset}
+                    onDeleteOverride={handleDeleteOverride}
+                    onOpenAuditLog={() => setIsAuditOpen(true)}
                 />
             </main>
 
             <AIAssistant
                 isOpen={isAIOpen}
                 onClose={() => setIsAIOpen(false)}
+                algorithm={algorithm}
                 onSelectTrain={(trainId, stationId) => setOverrideVisit(`${trainId}|${stationId}`)}
                 initialQuery={aiInitialQuery}
+            />
+
+            <AuditLogModal
+                isOpen={isAuditOpen}
+                onClose={() => setIsAuditOpen(false)}
             />
         </div>
     );

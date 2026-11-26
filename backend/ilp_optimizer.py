@@ -47,8 +47,10 @@ def ilp_optimizer(
     stations: List[Station],
     fixed_platforms: Optional[Dict[Tuple[str, str], int]] = None,
     time_limit_seconds: int = DEFAULT_TIME_LIMIT,
+    blocked_platforms: Optional[Dict[str, List[int]]] = None,
 ) -> Tuple[List[ScheduleEntry], List[ConflictLogEntry]]:
     fixed_platforms = fixed_platforms or {}
+    blocked_platforms = blocked_platforms or {}
     station_platforms = {s.id: s.platforms for s in stations}
 
     schedule: List[ScheduleEntry] = []
@@ -60,8 +62,9 @@ def ilp_optimizer(
 
     for station_id, station_visits in by_station.items():
         num_platforms = station_platforms.get(station_id, 1)
+        blocked_set = set(blocked_platforms.get(station_id, []))
         entries, station_conflicts = _solve_station(
-            station_id, station_visits, num_platforms, fixed_platforms, time_limit_seconds
+            station_id, station_visits, num_platforms, fixed_platforms, time_limit_seconds, blocked_set
         )
         schedule.extend(entries)
         conflicts.extend(station_conflicts)
@@ -76,14 +79,18 @@ def _solve_station(
     num_platforms: int,
     fixed_platforms: Dict[Tuple[str, str], int],
     time_limit_seconds: int,
+    blocked_set: Optional[set] = None,
 ) -> Tuple[List[ScheduleEntry], List[ConflictLogEntry]]:
     n = len(visits)
     if n == 0:
         return [], []
 
+    blocked_set = blocked_set or set()
     arrival = {v.id: to_minutes(v.scheduled_arrival) for v in visits}
     duration = {v.id: max(to_minutes(v.scheduled_departure) - to_minutes(v.scheduled_arrival), 5) for v in visits}
-    platforms = list(range(1, num_platforms + 1))
+    platforms = [p for p in range(1, num_platforms + 1) if p not in blocked_set]
+    if not platforms:
+        platforms = list(range(1, num_platforms + 1))
 
     prob = pulp.LpProblem(f"TrainScheduling_{station_id}", pulp.LpMinimize)
 
@@ -102,10 +109,10 @@ def _solve_station(
     for v in visits:
         prob += pulp.lpSum(x[(v.id, p)] for p in platforms) == 1
 
-    # Constraint 4: controller overrides are fixed
+    # Constraint 4: controller overrides are fixed (when the overridden platform is open)
     for v in visits:
         key = (v.train_id, v.station_id)
-        if key in fixed_platforms:
+        if key in fixed_platforms and fixed_platforms[key] in platforms:
             fixed_p = fixed_platforms[key]
             for p in platforms:
                 prob += x[(v.id, p)] == (1 if p == fixed_p else 0)
@@ -133,11 +140,12 @@ def _solve_station(
     conflicts: List[ConflictLogEntry] = []
 
     for v in visits:
-        assigned_platform = next(p for p in platforms if pulp.value(x[(v.id, p)]) > 0.5)
-        actual_start = round(pulp.value(start[v.id]))
+        assigned_platform = next((p for p in platforms if (pulp.value(x[(v.id, p)]) or 0) > 0.5), platforms[0])
+        actual_start = round(pulp.value(start[v.id]) or arrival[v.id])
         actual_end = actual_start + duration[v.id]
         delay = actual_start - arrival[v.id]
-        is_override = (v.train_id, v.station_id) in fixed_platforms
+        key = (v.train_id, v.station_id)
+        is_override = key in fixed_platforms and fixed_platforms[key] in platforms
 
         if is_override:
             reason = "Controller override: fixed to this platform (ILP-respected)"

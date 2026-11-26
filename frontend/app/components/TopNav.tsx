@@ -3,14 +3,21 @@
 
 import { Dispatch, SetStateAction, useEffect, useState } from "react";
 import { UserButton, useUser } from "@clerk/nextjs";
+import { DataSourceInfo } from "../types";
+
+export type ConsoleViewMode = "schedule" | "radar" | "analytics" | "simulation";
 
 interface Props {
   algorithm: "greedy" | "ilp";
   setAlgorithm: Dispatch<SetStateAction<"greedy" | "ilp">>;
   onToggleAI?: () => void;
   isAIOpen?: boolean;
-  viewMode?: "schedule" | "radar";
-  setViewMode?: (mode: "schedule" | "radar") => void;
+  viewMode?: ConsoleViewMode;
+  setViewMode?: (mode: ConsoleViewMode) => void;
+  dataSource?: DataSourceInfo | null;
+  onRefreshTrains?: () => void;
+  isRefreshingTrains?: boolean;
+  onOpenAuditLog?: () => void;
 }
 
 export default function TopNav({
@@ -20,6 +27,10 @@ export default function TopNav({
   isAIOpen,
   viewMode = "schedule",
   setViewMode,
+  dataSource,
+  onRefreshTrains,
+  isRefreshingTrains = false,
+  onOpenAuditLog,
 }: Props) {
   const { isLoaded, isSignedIn } = useUser();
   const [time, setTime] = useState<string>("--:--:--");
@@ -112,7 +123,7 @@ export default function TopNav({
 
       {/* Right Controls */}
       <div className="flex items-center gap-2 sm:gap-3">
-        {/* Schedule / Radar */}
+        {/* Console View Mode Switcher */}
         {setViewMode && (
           <div
             role="group"
@@ -159,10 +170,96 @@ export default function TopNav({
                 <circle cx="12" cy="12" r="2" fill="currentColor" />
                 <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49" />
               </svg>
-              <span>Live Radar</span>
+              <span className="hidden md:inline">Radar</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
             </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode("analytics")}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${viewMode === "analytics"
+                  ? "bg-cyan text-deep font-semibold shadow-xs"
+                  : "text-secondary hover:text-primary hover:bg-panel"
+                }`}
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+              <span className="hidden md:inline">Analytics</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode("simulation")}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all cursor-pointer ${viewMode === "simulation"
+                  ? "bg-cyan text-deep font-semibold shadow-xs"
+                  : "text-secondary hover:text-primary hover:bg-panel"
+                }`}
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
+              <span className="hidden md:inline">Simulator</span>
+            </button>
           </div>
+        )}
+
+        {/* Data Source Indicator & Manual Refresh */}
+        {dataSource && (
+          <div
+            title={dataSource.last_error || `Source: ${dataSource.source}`}
+            className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-deep/80 border border-border text-[11px] font-mono"
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                dataSource.source === "railradar" ? "bg-emerald-400" : "bg-amber"
+              }`}
+            />
+            <span className="text-secondary">
+              {dataSource.source === "railradar" ? "RailRadar Live" : "Static Fallback"}
+            </span>
+            {onRefreshTrains && (
+              <button
+                type="button"
+                onClick={onRefreshTrains}
+                disabled={isRefreshingTrains}
+                title="Force refresh RailRadar live board (uses API quota)"
+                className="ml-1 text-cyan hover:text-cyan-glow disabled:opacity-50 cursor-pointer"
+              >
+                {isRefreshingTrains ? "..." : "↻"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Audit Log Drawer Button */}
+        {onOpenAuditLog && (
+          <button
+            type="button"
+            onClick={onOpenAuditLog}
+            title="View persistent audit log"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-panel border border-border text-secondary hover:text-primary hover:border-slate-700 text-xs font-medium cursor-pointer"
+          >
+            <svg className="w-3.5 h-3.5 text-cyan" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            <span className="hidden lg:inline">Audit Log</span>
+          </button>
         )}
 
         {/* AI Copilot */}

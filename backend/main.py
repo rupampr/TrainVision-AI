@@ -7,20 +7,28 @@ from typing import Dict, Tuple, List, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
 
-from models import Station, Visit, OverrideRequest, ScheduleResponse
+from models import (
+    AnalyticsResponse,
+    OverrideInfo,
+    OverrideRequest,
+    ScheduleResponse,
+    SimulationRequest,
+    SimulationResponse,
+    Station,
+    Visit,
+)
 from optimizer import greedy_optimizer
 from railradar_client import fetch_live_visits, RailRadarError
 from ilp_optimizer import ilp_optimizer
 from ai_assistant import answer_query, generate_recommendations, is_configured, get_model, AIAssistantError
 from database import get_db, init_db
 from db_models import OverrideRecord, AuditLogEntry
+from simulation_analytics import build_analytics_report, run_simulation
 from websocket_manager import manager
 from train_positions import get_positions, prioritize_trains_for_tracking
 
@@ -135,16 +143,26 @@ def get_trains():
     return get_current_visits()
 
 
+def _compute_schedule(
+    algorithm: str,
+    visits: List[Visit],
+    overrides: Dict[Tuple[str, str], int],
+) -> ScheduleResponse:
+    if algorithm == "ilp":
+        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
+    else:
+        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    return ScheduleResponse(
+        schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat()
+    )
+
+
 @app.get("/schedule", response_model=ScheduleResponse)
 def get_schedule(algorithm: str = "greedy", db: Session = Depends(get_db)):
     try:
         visits = get_current_visits()
         overrides = load_overrides_dict(db)
-        if algorithm == "ilp":
-            schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
-        else:
-            schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
-        return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+        return _compute_schedule(algorithm, visits, overrides)
     except HTTPException:
         raise
     except Exception as e:
@@ -155,8 +173,74 @@ def get_schedule(algorithm: str = "greedy", db: Session = Depends(get_db)):
 @app.get("/log")
 def get_audit_log(db: Session = Depends(get_db)):
     """Returns the audit trail of override actions."""
-    logs = db.query(AuditLogEntry).order_by(AuditLogEntry.timestamp.desc()).all()
+    logs = db.query(AuditLogEntry).order_by(AuditLogEntry.timestamp.desc()).limit(200).all()
     return logs
+
+
+@app.get("/overrides", response_model=list[OverrideInfo])
+def list_overrides(db: Session = Depends(get_db)):
+    """Lists all currently active manual controller overrides."""
+    rows = db.query(OverrideRecord).order_by(OverrideRecord.station_id, OverrideRecord.train_id).all()
+    return [
+        OverrideInfo(train_id=r.train_id, station_id=r.station_id, platform=r.platform)
+        for r in rows
+    ]
+
+
+@app.delete("/override/{train_id}/{station_id}", response_model=ScheduleResponse)
+def delete_override(
+    train_id: str,
+    station_id: str,
+    algorithm: str = "greedy",
+    db: Session = Depends(get_db),
+):
+    """Removes a single manual override and re-optimizes the schedule."""
+    record = db.query(OverrideRecord).filter_by(
+        train_id=train_id, station_id=station_id
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Override not found")
+
+    db.delete(record)
+    db.add(
+        AuditLogEntry(
+            action="UNOVERRIDE",
+            train_id=train_id,
+            station_id=station_id,
+            platform=record.platform,
+            details=f"Cleared manual override for train {train_id} at {station_id} (was PF {record.platform})",
+        )
+    )
+    db.commit()
+
+    overrides = load_overrides_dict(db)
+    visits = get_current_visits()
+    return _compute_schedule(algorithm, visits, overrides)
+
+
+@app.get("/analytics", response_model=AnalyticsResponse)
+def get_analytics(algorithm: str = "greedy", db: Session = Depends(get_db)):
+    """Computes platform utilization, station breakdowns, and Greedy vs ILP benchmarks."""
+    active_algo = "ilp" if algorithm == "ilp" else "greedy"
+    visits = get_current_visits()
+    overrides = load_overrides_dict(db)
+    try:
+        return build_analytics_report(active_algo, visits, STATIONS, overrides)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analytics generation failed: {type(e).__name__}: {e}")
+
+
+@app.post("/simulate", response_model=SimulationResponse)
+def simulate_disruption(payload: SimulationRequest, db: Session = Depends(get_db)):
+    """Runs a non-destructive What-If disruption simulation without altering saved overrides."""
+    visits = get_current_visits()
+    overrides = load_overrides_dict(db)
+    try:
+        return run_simulation(payload, visits, STATIONS, overrides)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Simulation failed: {type(e).__name__}: {e}")
 
 
 @app.post("/trains/refresh")
@@ -208,11 +292,7 @@ def apply_override(payload: OverrideRequest, algorithm: str = "greedy", db: Sess
         db.commit()
 
         overrides = load_overrides_dict(db)
-        if algorithm == "ilp":
-            schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
-        else:
-            schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
-        return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+        return _compute_schedule(algorithm, visits, overrides)
     except HTTPException:
         raise
     except Exception as e:
@@ -236,11 +316,7 @@ def reset_overrides(algorithm: str = "greedy", db: Session = Depends(get_db)):
 
     overrides = load_overrides_dict(db)
     visits = get_current_visits()
-    if algorithm == "ilp":
-        schedule, conflicts = ilp_optimizer(visits, STATIONS, overrides)
-    else:
-        schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
-    return ScheduleResponse(schedule=schedule, conflicts=conflicts, generated_at=datetime.now().isoformat())
+    return _compute_schedule(algorithm, visits, overrides)
 
 
 @app.get("/ai/status")
@@ -253,27 +329,32 @@ class AIQueryRequest(BaseModel):
 
 
 @app.post("/ai/analyze-schedule")
-def ai_analyze_schedule(payload: Optional[AIQueryRequest] = None, query: Optional[str] = None, db: Session = Depends(get_db)):
+def ai_analyze_schedule(
+    payload: Optional[AIQueryRequest] = None,
+    query: Optional[str] = None,
+    algorithm: str = "greedy",
+    db: Session = Depends(get_db),
+):
     q = (payload.query if payload else None) or query
     if not q:
         raise HTTPException(status_code=400, detail="Query is required")
     visits = get_current_visits()
     overrides = load_overrides_dict(db)
-    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    resp = _compute_schedule(algorithm, visits, overrides)
     try:
-        answer = answer_query(q, schedule, conflicts)
+        answer = answer_query(q, resp.schedule, resp.conflicts)
     except AIAssistantError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {"query": q, "answer": answer}
 
 
 @app.get("/recommendations")
-def get_recommendations(db: Session = Depends(get_db)):
+def get_recommendations(algorithm: str = "greedy", db: Session = Depends(get_db)):
     visits = get_current_visits()
     overrides = load_overrides_dict(db)
-    schedule, conflicts = greedy_optimizer(visits, STATIONS, overrides)
+    resp = _compute_schedule(algorithm, visits, overrides)
     try:
-        recs = generate_recommendations(schedule, conflicts)
+        recs = generate_recommendations(resp.schedule, resp.conflicts)
     except AIAssistantError as e:
         raise HTTPException(status_code=503, detail=str(e))
     return {"recommendations": recs}

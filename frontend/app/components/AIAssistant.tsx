@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, FormEvent } from "react";
+import { useState, useEffect, useRef, useCallback, FormEvent } from "react";
 import { AIRecommendation, AIChatMessage, AIStatus } from "../types";
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   apiUrl?: string;
+  algorithm?: "greedy" | "ilp";
   onSelectTrain?: (trainId: string, stationId: string) => void;
   initialQuery?: string;
 }
@@ -15,20 +16,13 @@ export default function AIAssistant({
   isOpen,
   onClose,
   apiUrl = "http://127.0.0.1:8000",
+  algorithm = "greedy",
   onSelectTrain,
   initialQuery,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"recommendations" | "chat">("recommendations");
   const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
 
-  // Sync initialQuery if passed
-  useEffect(() => {
-    if (initialQuery && isOpen) {
-      setActiveTab("chat");
-      setInputQuery(initialQuery);
-    }
-  }, [initialQuery, isOpen]);
-  
   // Recommendations state
   const [recommendations, setRecommendations] = useState<AIRecommendation[]>([]);
   const [loadingRecs, setLoadingRecs] = useState<boolean>(false);
@@ -40,16 +34,26 @@ export default function AIAssistant({
       id: "welcome",
       sender: "assistant",
       text: "Hello, Controller. I am TrainVision AI Copilot powered by Google Gemini. Ask me anything about current platform congestion, train delays, or conflict resolutions across Howrah, Santragachi, and Kharagpur.",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      timestamp: "Ready",
     },
   ]);
   const [inputQuery, setInputQuery] = useState<string>("");
   const [isAnswering, setIsAnswering] = useState<boolean>(false);
-  const [chatError, setChatError] = useState<string | null>(null);
 
+  const msgCounterRef = useRef<number>(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const fetchApi = async (path: string, options?: RequestInit): Promise<Response> => {
+  // Sync initialQuery if passed
+  useEffect(() => {
+    if (!initialQuery || !isOpen) return;
+    const t = setTimeout(() => {
+      setActiveTab("chat");
+      setInputQuery(initialQuery);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [initialQuery, isOpen]);
+
+  const fetchApi = useCallback(async (path: string, options?: RequestInit): Promise<Response> => {
     if (apiUrl && apiUrl !== "http://127.0.0.1:8000") {
       return fetch(`${apiUrl}${path}`, options);
     }
@@ -61,27 +65,33 @@ export default function AIAssistant({
     }
     const host = typeof window !== "undefined" && window.location.hostname === "localhost" ? "localhost" : "127.0.0.1";
     return fetch(`http://${host}:8000${path}`, options);
-  };
+  }, [apiUrl]);
 
   // Fetch AI configuration status
   useEffect(() => {
+    let cancelled = false;
     fetchApi("/ai/status")
       .then((res) => {
         if (!res.ok) throw new Error(`Status ${res.status}`);
         return res.json();
       })
-      .then((data) => setAiStatus(data))
+      .then((data) => {
+        if (!cancelled) setAiStatus(data);
+      })
       .catch((err) => {
         console.warn("AI Status fetch warning:", err);
       });
-  }, [apiUrl]);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchApi]);
 
   // Fetch recommendations
   const fetchRecommendations = async () => {
     setLoadingRecs(true);
     setRecsError(null);
     try {
-      const res = await fetchApi("/recommendations");
+      const res = await fetchApi(`/recommendations?algorithm=${algorithm}`);
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
         throw new Error(errData?.detail || `Server returned ${res.status}`);
@@ -97,10 +107,30 @@ export default function AIAssistant({
   };
 
   useEffect(() => {
-    if (isOpen && activeTab === "recommendations" && recommendations.length === 0 && !loadingRecs) {
-      fetchRecommendations();
+    if (!isOpen || activeTab !== "recommendations") return;
+    let cancelled = false;
+    async function load() {
+      setLoadingRecs(true);
+      setRecsError(null);
+      try {
+        const res = await fetchApi(`/recommendations?algorithm=${algorithm}`);
+        if (!res.ok) {
+          const errData = await res.json().catch(() => null);
+          throw new Error(errData?.detail || `Server returned ${res.status}`);
+        }
+        const data = await res.json();
+        if (!cancelled) setRecommendations(data.recommendations || []);
+      } catch (err: unknown) {
+        if (!cancelled) setRecsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoadingRecs(false);
+      }
     }
-  }, [isOpen, activeTab]);
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeTab, algorithm, fetchApi]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -114,8 +144,9 @@ export default function AIAssistant({
     const textToSend = queryText || inputQuery;
     if (!textToSend.trim() || isAnswering) return;
 
+    msgCounterRef.current += 1;
     const userMsg: AIChatMessage = {
-      id: `user-${Date.now()}`,
+      id: `user-${msgCounterRef.current}`,
       sender: "user",
       text: textToSend.trim(),
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -124,10 +155,9 @@ export default function AIAssistant({
     setMessages((prev) => [...prev, userMsg]);
     setInputQuery("");
     setIsAnswering(true);
-    setChatError(null);
 
     try {
-      const res = await fetchApi("/ai/analyze-schedule", {
+      const res = await fetchApi(`/ai/analyze-schedule?algorithm=${algorithm}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: textToSend.trim() }),
@@ -139,8 +169,9 @@ export default function AIAssistant({
       }
 
       const data = await res.json();
+      msgCounterRef.current += 1;
       const aiMsg: AIChatMessage = {
-        id: `ai-${Date.now()}`,
+        id: `ai-${msgCounterRef.current}`,
         sender: "assistant",
         text: data.answer || "No response generated.",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -148,9 +179,9 @@ export default function AIAssistant({
       setMessages((prev) => [...prev, aiMsg]);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setChatError(msg);
+      msgCounterRef.current += 1;
       const errorMsg: AIChatMessage = {
-        id: `err-${Date.now()}`,
+        id: `err-${msgCounterRef.current}`,
         sender: "assistant",
         text: `⚠️ Analysis failed: ${msg}. If Gemini API is unconfigured, please set GEMINI_API_KEY in backend/.env.`,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),

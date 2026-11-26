@@ -48,8 +48,10 @@ def greedy_optimizer(
     visits: List[Visit],
     stations: List[Station],
     fixed_platforms: Optional[Dict[Tuple[str, str], int]] = None,
+    blocked_platforms: Optional[Dict[str, List[int]]] = None,
 ) -> Tuple[List[ScheduleEntry], List[ConflictLogEntry]]:
     fixed_platforms = fixed_platforms or {}
+    blocked_platforms = blocked_platforms or {}
     station_platforms = {s.id: s.platforms for s in stations}
 
     schedule: List[ScheduleEntry] = []
@@ -66,6 +68,11 @@ def greedy_optimizer(
 
     for station_id, station_visits in by_station.items():
         num_platforms = station_platforms.get(station_id, 1)
+        blocked_set = set(blocked_platforms.get(station_id, []))
+        allowed_platforms = [p for p in range(1, num_platforms + 1) if p not in blocked_set]
+        if not allowed_platforms:
+            allowed_platforms = list(range(1, num_platforms + 1))
+
         ordered = sorted(station_visits, key=lambda v: sort_key(v, fixed_platforms))
 
         for visit in ordered:
@@ -74,7 +81,7 @@ def greedy_optimizer(
             arrival = to_minutes(visit.scheduled_arrival)
 
             override_key = (visit.train_id, visit.station_id)
-            is_override = override_key in fixed_platforms
+            is_override = override_key in fixed_platforms and fixed_platforms[override_key] in allowed_platforms
 
             if is_override:
                 platform = fixed_platforms[override_key]
@@ -87,8 +94,9 @@ def greedy_optimizer(
                 schedule.append(_entry(visit, platform, start, end, reason, True))
                 continue
 
-            preferred = visit.platform_pref or 1
+            preferred = visit.platform_pref or allowed_platforms[0]
             preferred = min(max(preferred, 1), num_platforms)
+            preferred_blocked = preferred in blocked_set
 
             placed = False
             delay = 0
@@ -98,13 +106,19 @@ def greedy_optimizer(
                 start = arrival + delay
                 end = start + duration
 
-                candidate_order = [preferred] + [p for p in range(1, num_platforms + 1) if p != preferred]
+                if preferred_blocked:
+                    candidate_order = allowed_platforms
+                else:
+                    candidate_order = [preferred] + [p for p in allowed_platforms if p != preferred]
+
                 for platform in candidate_order:
                     existing = platform_usage[station_id][platform]
                     clashing = [t for (s, e, t) in existing if intervals_conflict(start, end, s, e)]
                     if not clashing:
-                        if delay == 0 and platform == preferred:
+                        if delay == 0 and platform == preferred and not preferred_blocked:
                             reason = "Preferred platform available at scheduled time"
+                        elif delay == 0 and preferred_blocked:
+                            reason = f"Reassigned to platform {platform} (platform {preferred} closed/blocked)"
                         elif delay == 0:
                             reason = f"Reassigned to platform {platform} (platform {preferred} busy)"
                         else:
@@ -113,7 +127,7 @@ def greedy_optimizer(
                         schedule.append(_entry(visit, platform, start, end, reason, False))
                         placed = True
                         break
-                    elif platform == preferred and not attempted_conflict_logged:
+                    elif platform == preferred and not preferred_blocked and not attempted_conflict_logged:
                         overlap = min(end, max(e for _, e, _ in existing)) - max(start, min(s for s, _, _ in existing))
                         severity = _severity(overlap)
                         conflicts.append(
@@ -134,8 +148,8 @@ def greedy_optimizer(
                     delay += DELAY_STEP
 
             if not placed:
-                # Force-assign to the platform with the fewest bookings at the delayed time
-                platform = min(range(1, num_platforms + 1), key=lambda p: len(platform_usage[station_id][p]))
+                # Force-assign to the allowed platform with the fewest bookings at the delayed time
+                platform = min(allowed_platforms, key=lambda p: len(platform_usage[station_id][p]))
                 start = arrival + MAX_DELAY
                 end = start + duration
                 platform_usage[station_id][platform].append((start, end, visit.train_id))
